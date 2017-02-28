@@ -10,6 +10,27 @@ from astropy.io import fits
 
 configDir = os.path.join(os.path.split(__file__)[0],'config')
 
+def read_cnfg(configName):
+	# read a scamp configuration file into a dictionary
+	cnfg={}
+	with open(configName) as f:
+		lines=f.readlines()
+		for line in lines:
+			# ignore empty lines
+			if not( line.strip() ):
+				continue
+			# ignore commented lines
+			if line.strip()[0]=='#':
+				continue
+			split = line.split(' ',1)
+			key=split[0]
+			# ignore comments
+			split = split[1].split('#',1)
+			val=split[0].strip()
+			cnfg[key]=val
+
+	return cnfg
+
 def put_wcs(imageFile,verbose=0):
 	configFile = os.path.join(configDir,'wcsput.missfits')
 	missfits_cmd = ['missfits','-c',configFile,imageFile]
@@ -17,9 +38,60 @@ def put_wcs(imageFile,verbose=0):
 		print ' '.join(missfits_cmd)
 	rv = subprocess.call(missfits_cmd)
 
-def scamp_solve(imageFile,catFile,refStarCatFile=None,
-                filt='g',savewcs=False,clobber=False,
-                check_plots=False,twopass=True,verbose=0,**kwargs):
+def scamp_solver(imageFile,catFile,verbose,**kwargs):
+	scamp_cmd_base = ['scamp',catFile,
+	                  '-c',os.path.join(configDir,'boksolve.scamp')]
+	
+	def add_scamp_pars(scamp_pars):
+		scamp_cmd = copy(scamp_cmd_base)
+		for k,v in scamp_pars.items():
+			scamp_cmd.extend(['-'+k,str(v)])
+		return scamp_cmd
+
+	# copy in options passed from command-line (override existing)
+	scamp_pars = {}
+	for k,v in kwargs.items():
+		scamp_pars[k] = v
+	scamp_cmd = add_scamp_pars(scamp_pars)
+	if verbose >= 1:
+		outdev = None
+		if verbose >=2:
+			print ' '.join(scamp_cmd)
+	else:
+		outdev = open(os.devnull,'w')
+
+	rv = subprocess.call(scamp_cmd,stdout=outdev)
+
+def scamp_solve(imageFile,catFile,wcsCnfg,savewcs=False,clobber=False,verbose=0):
+
+	headf = catFile.replace('.fits','.head') 
+	tmpAhead = catFile.replace('.fits','.ahead')
+	wcsFile = imageFile.replace('.fits','.ahead')
+	if not clobber and os.path.exists(wcsFile):
+		if verbose > 0:
+			print wcsFile,' already exists, skipping'
+		return
+	try:
+		os.unlink(wcsFile)
+	except:
+		pass
+
+	for n, cnfg in enumerate(wcsCnfg):
+		scamp_pars = read_cnfg(cnfg)
+		if verbose >= 1:
+			print 'scamp_solve pass', '%i of %i for' % (n+1,len(wcsCnfg)), imageFile
+		scamp_solver(imageFile,catFile,verbose,**scamp_pars)
+		shutil.move(headf,tmpAhead)
+	
+	shutil.move(tmpAhead,wcsFile)
+	if savewcs:
+		put_wcs(imageFile,verbose=verbose)
+	return
+
+def scamp_default_solve(imageFile,catFile,refStarCatFile=None,
+			filt='g',savewcs=False,clobber=False,
+			check_plots=False,twopass=True,verbose=0):
+
 	headf = catFile.replace('.fits','.head') 
 	wcsFile = imageFile.replace('.fits','.ahead')
 	if not clobber and os.path.exists(wcsFile):
@@ -30,14 +102,7 @@ def scamp_solve(imageFile,catFile,refStarCatFile=None,
 		refCatPath = os.path.dirname(refStarCatFile)
 		if len(refCatPath)==0:
 			refCatPath = '.'
-	#
-	scamp_cmd_base = ['scamp',catFile,
-	                  '-c',os.path.join(configDir,'boksolve.scamp')]
-	def add_scamp_pars(scamp_pars):
-		scamp_cmd = copy(scamp_cmd_base)
-		for k,v in scamp_pars.items():
-			scamp_cmd.extend(['-'+k,str(v)])
-		return scamp_cmd
+
 	try:
 		os.unlink(wcsFile)
 	except:
@@ -59,24 +124,17 @@ def scamp_solve(imageFile,catFile,refStarCatFile=None,
 		scamp_pars['ASTREF_CATALOG'] = 'FILE'
 	else:
 		scamp_pars['ASTREF_CATALOG'] = 'SDSS-R9'
+		print scamp_pars['ASTREF_CATALOG']
 		scamp_pars['ASTREF_BAND'] = filt
 		if refStarCatFile is not None:
 			scamp_pars['SAVE_REFCATALOG'] = 'Y'
 		# see below
 		#scamp_pars['ASTREFCAT_NAME'] = os.path.basename(refStarCatFile)
 		#scamp_pars['REFOUT_CATPATH'] = refCatPath
-	# copy in options passed from command-line (override existing)
-	for k,v in kwargs.items():
-		scamp_pars[k] = v
-	scamp_cmd = add_scamp_pars(scamp_pars)
 	if verbose >= 1:
 		print 'first pass scamp_solve for ',imageFile
-		outdev = None
-		if verbose >= 2:
-			print ' '.join(scamp_cmd)
-	else:
-		outdev = open(os.devnull,'w')
-	rv = subprocess.call(scamp_cmd,stdout=outdev)
+	scamp_solver(imageFile,catFile,verbose,**scamp_pars)
+
 	tmpAhead = catFile.replace('.fits','.ahead') 
 	shutil.move(headf,tmpAhead)
 	if refStarCatFile is not None and scamp_pars['ASTREF_CATALOG'] != 'FILE':
@@ -111,12 +169,11 @@ def scamp_solve(imageFile,catFile,refStarCatFile=None,
 	scamp_pars['MOSAIC_TYPE'] = 'FIX_FOCALPLANE'
 	if check_plots:
 		del scamp_pars['CHECKPLOT_TYPE']
-	scamp_cmd = add_scamp_pars(scamp_pars)
+	
 	if verbose > 1:
-		print ' '.join(scamp_cmd)
-	elif verbose > 0:
 		print 'second pass scamp_solve for ',imageFile
-	rv = subprocess.call(scamp_cmd,stdout=outdev)
+	scamp_solver(imageFile,catFile,verbose,**scamp_pars)
+	
 	shutil.move(headf,wcsFile)
 	os.unlink(tmpAhead)
 	#

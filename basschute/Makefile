@@ -1,9 +1,12 @@
 #!/usr/bin/make
 
+# define escaped comma
+, := ,
+
 .PHONY: initproc badpix flats proc redo
 
 ifndef DATE
-	$(error DATE must be set!)
+$(error DATE must be set!)
 endif
 UTARGS := --night $(DATE)
 
@@ -36,8 +39,24 @@ else
 	PROCARGS := --nousepixflat --fixsaturation --nobiascorr --noweightmap
 endif
 
+ifdef WCSCNFG
+# check configuration files exist
+FNS := $(subst $(,), ,${WCSCNFG})
+MTCH := $(foreach f,$(FNS),$(wildcard $(f)))
+MISS := $(filter-out $(MTCH), $(FNS))
+N := $(words $(MISS))
+ifneq ($(N), 0)
+$(info No such configuration file(s)!)
+$(foreach f,$(MISS),$(info $(f)))
+$(error )
+endif
+WCSCNFG := --wcsconfig $(WCSCNFG)
+endif
+
+WCSARGS := $(WCSCNFG) 
+
 INITARGS := $(LOGARGS) $(DATAARGS) $(UTARGS) $(BANDARGS) \
-            $(MPARGS) $(VERBOSE) 
+            $(MPARGS) $(VERBOSE) $(WCSARGS)
 
 all_detrend: initproc badpix proc1 makeillum flats proc2
 
@@ -142,7 +161,7 @@ quickproc:
 
 # Obtain astrometric solutions
 wcs:
-	python basschute.py $(INITARGS) -s wcs --gaia $(XARGS)
+	python basschute.py $(INITARGS) -s wcs $(XARGS)
 
 
 # Generate object catalogs and PSF models with sextractor+psfex
