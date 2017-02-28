@@ -35,7 +35,7 @@ def generate_log(dirs,logFile,filters=None,objFilter=None,filePattern=None,
 	                 'hdrAirmass','airmass',
 	                 'alt','az','ha','lst',
 	                 'targetRa','targetDec','targetCoord',
-	                 'utObs','mjd',
+	                 'utObs','mjdStart','mjdMid',
 	                 'cameraTemp','dewarTemp',
 	                 'outsideTemp','outsideHumidity','outsideDewpoint',
 	                 'insideTemp','insideHumidity',
@@ -49,7 +49,7 @@ def generate_log(dirs,logFile,filters=None,objFilter=None,filePattern=None,
 	                 'f4','f4',
 	                 'f4','f4','S10','S10',
 	                 'f8','f4','S15',
-	                 'S12','f8',
+	                 'S12','f8','f8',
 	                 'f4','f4',
 	                 'f4','f4','f4',
 	                 'f4','f4',
@@ -82,7 +82,7 @@ def generate_log(dirs,logFile,filters=None,objFilter=None,filePattern=None,
 		filt = h.get('FILTER','null').strip()
 		if filters is not None and filt not in filters:
 			continue
-		objName = h.get('OBJECT','null').strip()
+		objName = str(h.get('OBJECT','null')).strip()
 		if len(objName)==0:
 			objName = 'null'
 		if objFilter is not None and imageType == 'object' and \
@@ -100,14 +100,14 @@ def generate_log(dirs,logFile,filters=None,objFilter=None,filePattern=None,
 		alt,az = h.get('ELEVAT',badfloat),h.get('AZIMUTH',badfloat)
 		try:
 			ha,lst = h['HA'].strip(),h['LST-OBS'].strip()
-		except ValueError:
+		except:
 			ha,lst = '',''
 		try:
 			coord = h['RA'].rstrip()+' '+h['DEC'].rstrip()
 			sc = SkyCoord(coord,unit=(u.hourangle,u.deg))
 			ra = sc.ra.degree
 			dec = sc.dec.degree
-		except ValueError:
+		except:
 			coord,ra,dec = '',badfloat,badfloat
 		try:
 			tObs = Time(h['DATE']+' '+h['UT'],scale='utc')
@@ -117,12 +117,13 @@ def generate_log(dirs,logFile,filters=None,objFilter=None,filePattern=None,
 			tOff = tObs + TimeDelta(5*u.hour)
 			# "2014-01-01 12:00:00.000" -> "20140101"
 			utDate = str(tOff.utc).split()[0].replace('-','')
-			mjd = tObs.mjd
-		except ValueError:
-			mjd = badfloat
+			mjdStart = tObs.mjd
+			mjdMid = (tObs + TimeDelta(h['EXPTIME']*u.second)).mjd
+		except:
+			mjdStart,mjdMid = badfloat,badfloat
 		try:
 			focA,focB,focC = [float(x) for x in h['FOCUSVAL'].split('*')[1:]]
-		except ValueError:
+		except:
 			focA,focB,focC = badfloat,badfloat,badfloat
 		try:
 			tempstr = r'.*TEMP_F=(.*) HUMID_%=(.*) DEWPOINT_F=(.*)'
@@ -199,7 +200,7 @@ def generate_log(dirs,logFile,filters=None,objFilter=None,filePattern=None,
 		row.extend([hdrAirmass,airmass])
 		row.extend([alt,az,ha,lst])
 		row.extend([ra,dec,coord])
-		row.extend([h.get('UT','null'),mjd])
+		row.extend([h.get('UT','null'),mjdStart,mjdMid])
 		row.extend([h.get('CAMTEMP',-99999),h.get('DEWTEMP',-99999)])
 		row.extend([outTemp,outHum,outDew])
 		row.extend([inTemp,inHum])
@@ -213,6 +214,6 @@ def generate_log(dirs,logFile,filters=None,objFilter=None,filePattern=None,
 	print
 	if inTable is not None:
 		t = vstack([inTable,t])
-		t.sort('mjd')
+		t.sort('mjdStart')
 	t.write(logFile,overwrite=True)
 
