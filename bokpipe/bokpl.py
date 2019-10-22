@@ -424,8 +424,6 @@ def make_supersky_flats(dataMap,byUtd=False,interpFill=True,**kwargs):
 	for filt,utd in filtAndUtd:
 		files,frames = dataMap.getFiles(imType='object',filt=filt,utd=utd,
 		                                with_frames=True)
-		if frames is None:
-			continue
 		_outfn = outfn = dataMap.storeCalibrator('skyflat',frames)
 		if interpFill:
 			_outfn = _outfn.replace('.fits','_raw.fits')
@@ -566,8 +564,9 @@ def sky_subtract(dataMap,skyArgs,redoskymask=False,
 	skySub.add_mask(dataMap.getCalMap('badpix4'))
 	skySub.process_files(files)
 
-def _wcs_worker(dataMap,inputType,savewcs,keepwcscat,
-                clobber,verbose,inp):
+def _wcs_worker(dataMap,inputType,wcsCnfg,savewcs,keepwcscat,
+	        clobber,verbose,inp):
+	
 	try:
 		imFile,fieldName = inp
 		imageFile = dataMap(inputType)(imFile)
@@ -587,11 +586,15 @@ def _wcs_worker(dataMap,inputType,savewcs,keepwcscat,
 		# kwargs sent to the following are added sextractor/scamp parameters
 		#  (e.g., {'VERBOSE':'FULL'}), so remap the pipeline kwargs 
 		bokphot.sextract(imageFile,catFile,
-		                 clobber=clobber,verbose=verbose)
-		bokastrom.scamp_solve(imageFile,catFile,
-		                      dataMap.getScampRefCat(fieldName),
-		                      filt='r',savewcs=savewcs,
-		                      clobber=clobber,verbose=verbose)
+				 clobber=clobber,verbose=verbose)
+		if wcsCnfg is None:
+			bokastrom.scamp_default_solve(imageFile,catFile,
+						      dataMap.getScampRefCat(fieldName),
+						      filt='r',savewcs=savewcs,twopass=True,
+						      clobber=clobber,verbose=verbose)
+		else:
+			bokastrom.scamp_solve(imageFile,catFile,wcsCnfg,savewcs=savewcs,
+					      clobber=clobber,verbose=verbose)
 		if not keepwcscat:
 			os.unlink(catFile)
 	except:
@@ -600,7 +603,8 @@ def _wcs_worker(dataMap,inputType,savewcs,keepwcscat,
 def set_wcs(dataMap,inputType='sky',savewcs=False,keepwcscat=True,**kwargs):
 	procmap = kwargs.pop('procmap',map)
 	filesAndFields = dataMap.getFiles(imType='object',with_objnames=True)
-	p_wcs_worker = partial(_wcs_worker,dataMap,inputType,savewcs,keepwcscat,
+	p_wcs_worker = partial(_wcs_worker,dataMap,inputType,kwargs.get('wcsCnfg', None),
+			       savewcs,keepwcscat,
 	                       kwargs.get('clobber',False),
 	                       kwargs.get('verbose',0))
 	status = procmap(p_wcs_worker,zip(*filesAndFields))
@@ -639,6 +643,7 @@ def bokpipe(dataMap,**kwargs):
 	processes = kwargs.get('processes',1)
 	procmap = kwargs.get('procmap')
 	maxmem = kwargs.get('maxmem',5)
+	wcsCnfg = kwargs.get('wcsCnfg',None)
 	chunkSize = 10
 	if processes > 1:
 		pool = multiprocessing.Pool(processes)
@@ -650,8 +655,8 @@ def bokpipe(dataMap,**kwargs):
 			dataMap.groupByUtdFilt = True
 	else:
 		procmap = map
-	pipekwargs = {'clobber':redo,'verbose':verbose,'debug':debug,
-	              'processes':processes,'procmap':procmap,'maxmem':maxmem}
+	pipekwargs = {'clobber':redo,'verbose':verbose,'debug':debug,'processes':processes,
+	              'procmap':procmap,'maxmem':maxmem,'wcsCnfg':wcsCnfg}
 	# fixpix is sticking nan's into the images in unmasked pixels (???)
 	fixpix = False #True
 	writeccdims = kwargs.get('calccdims',False)
@@ -966,6 +971,8 @@ def init_pipeline_args(parser):
 	                help='write wcs to headers')
 	parser.add_argument('--wcscheck',action='store_true',
 	                help='make astrometry diagnostic files')
+	parser.add_argument('--wcsconfig',type=str,default=None,
+	                help='space separated list of optional wcs config files')
 	parser.add_argument('--maxflatcounts',type=int,
 	                help='maximum counts (ADU) to accept for a flat')
 	parser.add_argument('--cleancals',action='store_true',
@@ -992,11 +999,15 @@ def run_pipe(dataMap,args,**_kwargs):
 		steps = ['oscan','proc1','proc2','wcs','cat']
 	else:
 		steps = args.steps.split(',')
+	if args.wcsconfig is not None:
+		args.wcsconfig = args.wcsconfig.split(',')
+
 	verbose = 0 if args.verbose is None else args.verbose
 	# convert command-line arguments into dictionary
 	opts = vars(args)
 	kwargs = { k : opts[k] for k in opts if opts[k] != None }
 	kwargs['steps'] = steps
+	kwargs['wcsCnfg'] = args.wcsconfig
 	for k,v in _kwargs.items():
 		kwargs[k] = v
 	# run pipeline processes
@@ -1026,4 +1037,5 @@ def run_pipe(dataMap,args,**_kwargs):
 				subprocess.call(cmd)
 	else:
 		bokpipe(dataMap,**kwargs)
+
 
